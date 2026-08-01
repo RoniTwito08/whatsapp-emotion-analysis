@@ -1,0 +1,32 @@
+{
+  "id_field": "id",
+  "text_mode": "field",
+  "text_field": "text",
+  "label_field": "label",
+  "minimum_examples_per_class": 2,
+  "test_size": 0.2,
+  "random_state": 42,
+  "cleaning": {
+    "replace_urls": true,
+    "replace_emails": true,
+    "replace_phones": true,
+    "replace_numbers": false,
+    "lowercase_english": true,
+    "remove_non_text_symbols": true
+  },
+  "tfidf": {
+    "analyzer": "word",
+    "ngram_range": [1, 2],
+    "min_df": 1,
+    "max_df": 0.95,
+    "max_features": 20000,
+    "sublinear_tf": true
+  },
+  "model": {
+    "max_iter": 3000,
+    "class_weight": "balanced",
+    "C": 1.0,
+    "random_state": 42,
+    "solver": "liblinear"
+  }
+}

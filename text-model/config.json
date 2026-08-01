@@ -1,0 +1,45 @@
+{
+  "model_name": "onlplab/alephbert-base",
+  "data": {
+    "input_path": "data/sample_corpus.jsonl",
+    "input_format": "jsonl",
+    "id_field": "conversation_id",
+    "messages_field": "messages",
+    "role_field": "role",
+    "text_field": "text",
+    "included_roles": ["customer"],
+    "label_field": "final_outcome",
+    "message_separator": " [SEP] ",
+    "label_mapping": {
+      "interested": [
+        "converted",
+        "appointment_set",
+        "pending",
+        "reengaged_pending"
+      ],
+      "losing_interest": [
+        "explicit_rejection",
+        "competitor_loss",
+        "delivery_loss",
+        "trust_loss",
+        "ghosted"
+      ]
+    }
+  },
+  "tokenizer": {
+    "max_length": 256,
+    "padding": "max_length",
+    "truncation": true,
+    "add_special_tokens": true
+  },
+  "dataloader": {
+    "batch_size": 4,
+    "shuffle": true,
+    "num_workers": 0,
+    "pin_memory": false
+  },
+  "model": {
+    "num_labels": 2
+  },
+  "random_seed": 42
+}

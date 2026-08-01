@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+text-model/outputs/*
+text-model/.cache/
+.cache/
+huggingface/
+
+# Keep placeholder files so empty data/output directories still exist in git.
+!text-model/outputs/.gitkeep
