@@ -1,8 +1,9 @@
 {
   "model_name": "onlplab/alephbert-base",
+  "experiment_name": "alephbert_baseline_v1",
   "data": {
-    "input_path": "data/sample_corpus.jsonl",
-    "input_format": "jsonl",
+    "input_path": "../hebrew-sales-dataset-generator/output/combined_dataset.json",
+    "input_format": "json",
     "id_field": "conversation_id",
     "messages_field": "messages",
     "role_field": "role",
@@ -27,14 +28,30 @@
     }
   },
   "tokenizer": {
-    "max_length": 256,
+    "max_length": 512,
     "padding": "max_length",
     "truncation": true,
     "add_special_tokens": true
   },
+  "split": {
+    "train_ratio": 0.70,
+    "val_ratio": 0.15,
+    "test_ratio": 0.15,
+    "random_seed": 42,
+    "split_ids_output": "outputs/split_ids.json"
+  },
+  "training": {
+    "epochs": 5,
+    "learning_rate": 2e-5,
+    "weight_decay": 0.01,
+    "warmup_ratio": 0.1,
+    "gradient_clip": 1.0,
+    "positive_class": "losing_interest",
+    "save_best_metric": "macro_f1"
+  },
   "dataloader": {
-    "batch_size": 4,
-    "shuffle": true,
+    "train_batch_size": 8,
+    "eval_batch_size": 16,
     "num_workers": 0,
     "pin_memory": false
   },

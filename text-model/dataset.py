@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
 
 import pandas as pd
 import torch
@@ -211,6 +211,7 @@ class HebrewConversationDataset(Dataset):
         config: Mapping[str, Any],
         tokenizer: PreTrainedTokenizerBase,
         base_dir: Optional[Path] = None,
+        subset_ids: Optional[Set[str]] = None,
     ) -> None:
         """Build the dataset described by config["data"] / config["tokenizer"].
 
@@ -219,6 +220,9 @@ class HebrewConversationDataset(Dataset):
             tokenizer: A loaded Hugging Face tokenizer.
             base_dir: Directory that data.input_path is resolved relative to.
                 Defaults to the current working directory.
+            subset_ids: Optional set of conversation IDs to include. When
+                provided, only records whose id_field value is in this set are
+                retained. Pass None to include all records (original behavior).
         """
         self.tokenizer = tokenizer
         data_config = config.get("data", {})
@@ -237,7 +241,9 @@ class HebrewConversationDataset(Dataset):
         records = load_corpus(input_path)
         logger.info("Loaded %d raw record(s) from %s", len(records), input_path)
 
-        texts, labels, record_ids = self._filter_and_extract(records, data_config, raw_to_mapped, self.label_to_id)
+        texts, labels, record_ids = self._filter_and_extract(
+            records, data_config, raw_to_mapped, self.label_to_id, subset_ids=subset_ids
+        )
         self._validate_retained_records(texts, labels, record_ids)
 
         max_length = int(tokenizer_config.get("max_length", 256))
@@ -278,6 +284,7 @@ class HebrewConversationDataset(Dataset):
         data_config: Mapping[str, Any],
         raw_to_mapped: Mapping[str, str],
         label_to_id: Mapping[str, int],
+        subset_ids: Optional[Set[str]] = None,
     ) -> tuple[List[str], List[int], List[str]]:
         """Turn raw records into parallel lists of (text, label_id, record_id)."""
         id_field = data_config.get("id_field", "conversation_id")
@@ -292,11 +299,18 @@ class HebrewConversationDataset(Dataset):
         skipped_empty_text = 0
         skipped_unmapped_label = 0
         skipped_missing_label = 0
+        skipped_not_in_subset = 0
 
         for index, record in enumerate(records):
             if not isinstance(record, Mapping):
                 skipped_no_messages += 1
                 continue
+
+            if subset_ids is not None:
+                record_id_check = get_nested_value(record, id_field)
+                if record_id_check is None or str(record_id_check) not in subset_ids:
+                    skipped_not_in_subset += 1
+                    continue
 
             raw_label = get_nested_value(record, label_field)
             if raw_label is None:
@@ -330,6 +344,8 @@ class HebrewConversationDataset(Dataset):
             labels.append(label_to_id[mapped_label])
             record_ids.append(record_id)
 
+        if skipped_not_in_subset:
+            logger.info("Excluded %d record(s) not in subset_ids.", skipped_not_in_subset)
         if skipped_no_messages:
             logger.info("Ignored %d record(s) with a missing/empty message list.", skipped_no_messages)
         if skipped_missing_label:

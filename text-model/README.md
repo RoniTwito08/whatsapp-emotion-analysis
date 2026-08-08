@@ -1,159 +1,311 @@
 # text-model
 
-## מטרת המודל
+AlephBERT fine-tuning pipeline for binary Hebrew conversation classification.
+Classifies WhatsApp sales conversations as `interested` or `losing_interest`
+based on customer message text only.
 
-תיקייה זו מכינה את צינור הקלט (input pipeline) עבור מודל הטקסט המרכזי של הפרויקט —
-מודל Transformer מבוסס עברית שיסווג שיחות לקוח (WhatsApp) לפי רמת עניין: `interested`
-מול `losing_interest`. **המשימה הנוכחית היא הכנה בלבד.** לא מתבצע כאן שום אימון של
-המודל, ולא מיוצרות תוצאות אימון או מדדי ביצועים (accuracy / F1) — אלה יגיעו בשלב הבא,
-לאחר שהקורפוס הסופי יהיה מוכן.
+---
 
-## למה AlephBERT?
+## What this model does
 
-`onlplab/alephbert-base` הוא מודל BERT שאומן מראש על טקסט עברי, ולכן הוא נקודת התחלה
-טבעית למשימת סיווג טקסט בעברית (במקום מודל אנגלי או רב-לשוני כללי). מכיוון שזהו
-צ'קפוינט (checkpoint) בסיסי (base) בלבד, **אין בו ראש סיווג (classification head)**
-מותאם למשימה שלנו — ראו הסבר על כך בהמשך.
+Fine-tunes `onlplab/alephbert-base` (Hebrew BERT) for sequence classification
+on conversation-level data. The classifier reads the customer's messages from
+a conversation and predicts whether the customer is `interested` (likely to
+convert) or `losing_interest` (ghosting, rejecting, churning).
 
-## מבנה הפרויקט
+**This model has not been evaluated yet.** Metrics will be reported here once
+a full training run is completed. Do not interpret code structure or loss values
+from smoke tests as model performance.
+
+---
+
+## Dataset
+
+**Source:** `hebrew-sales-dataset-generator/output/combined_dataset.json`
+
+- 3,055 synthetic Hebrew WhatsApp-style conversations
+- All conversations are labeled `synthetic: true`
+- Binary label distribution: `interested` = 1,529 (50.0%), `losing_interest` = 1,526 (50.0%)
+- 58 business domains (furniture, dental, legal, fitness, etc.)
+
+### Label mapping
+
+Raw `final_outcome` → binary label:
+
+| Binary label | Raw outcomes |
+|---|---|
+| `interested` | `converted`, `appointment_set`, `pending`, `reengaged_pending` |
+| `losing_interest` | `explicit_rejection`, `competitor_loss`, `delivery_loss`, `trust_loss`, `ghosted` |
+
+Label IDs are assigned alphabetically: `interested = 0`, `losing_interest = 1`.
+
+### Model input
+
+Only **customer messages** are fed to the tokenizer. Business messages,
+`interest_label`, `interest_score`, `interest_trajectory`, and all outcome
+fields are excluded. The only text that enters the model is
+`msg["text"]` where `msg["role"] == "customer"`.
+
+Customer messages within a conversation are joined with ` [SEP] `.
+
+---
+
+## Train / validation / test split
+
+- **70 / 15 / 15** split at the **conversation level** (stratified by binary label)
+- Random seed: 42
+- Train: 2,137 conversations | Val: 459 | Test: 459
+- Split is computed once and saved to `outputs/split_ids.json` so the
+  TF-IDF baseline can use the identical test set for a fair comparison
+
+**No conversation ID appears in more than one split.** The code explicitly
+validates zero overlap after splitting.
+
+---
+
+## Truncation warning
+
+Hebrew text is tokenized into subword tokens by AlephBERT's tokenizer.
+Estimated truncation at different `max_length` values:
+
+| max_length | Estimated % truncated |
+|---|---|
+| 128 | ~94% |
+| 256 | ~85% |
+| **512 (current default)** | **~38%** |
+
+Using `max_length=256` is **not recommended** — it would truncate 85% of
+conversations and cause the model to miss most of the conversational context.
+The current default is **512**, which is AlephBERT's architectural maximum.
+
+Even at 512, ~38% of conversations are truncated. A future experiment
+should test full-conversation summarization or hierarchical encoding.
+
+---
+
+## Leakage risks
+
+1. **Per-message `interest_label`**: Every message has a label field
+   (e.g., `"converted"`, `"rejected"`). The current pipeline reads only
+   `msg["text"]` — this field never enters the model. **Safe as-is.**
+
+2. **Terminal customer messages**: Converted conversations end with
+   commitment language; rejected ones with rejection language. This is
+   a natural correlation (not a bug), but in synthetic data these patterns
+   may be more stereotyped than in real data, which would inflate reported
+   performance. Results should be validated on real conversation data before
+   drawing conclusions.
+
+3. **Fields that must never enter the model:**
+   `final_outcome`, `interest_trajectory`, `final_interest_score`,
+   `interest_score` per message.
+
+---
+
+## Files
 
 ```
 text-model/
-├── config.json          # כל ההגדרות הניתנות לשינוי (מודל, שדות, טוקנייזר, דאטהלואדר)
-├── dataset.py            # HebrewConversationDataset - טעינה, מיפוי תוויות, טוקניזציה
-├── data_loader.py         # טעינת קונפיג, טוקנייזר, מודל, Dataset ו-DataLoader
-├── validate_inputs.py     # בדיקת עשן (smoke test) מקצה לקצה כולל forward pass
-├── inspect_batch.py       # הצגת דוגמת batch מטוקנז לבדיקה ידנית
+├── config.json                  # All configurable parameters
+├── train.py                     # Training pipeline (entry point)
+├── analyze_dataset.py           # Dataset analysis report
+├── splitter.py                  # Stratified conversation-level split
+├── dataset.py                   # HebrewConversationDataset
+├── data_loader.py               # Config/tokenizer/model/dataloader factories
+├── validate_inputs.py           # Input pipeline smoke test
+├── inspect_batch.py             # Manual batch inspection tool
+├── behavioral_features_design.py # Design sketch for behavioral features
 ├── requirements.txt
-├── README.md              # הקובץ הזה
+├── tests/
+│   ├── test_splitter.py
+│   ├── test_label_mapping.py
+│   └── test_train_smoke.py
 ├── data/
-│   ├── .gitkeep
-│   └── sample_corpus.jsonl   # קורפוס דמה סינתטי, לבדיקה טכנית בלבד
+│   └── sample_corpus.jsonl      # Tiny test fixture only — NOT for training
 └── outputs/
-    └── .gitkeep               # ליציאות עתידיות (לא נשמר ב-git)
+    └── alephbert_baseline_v1/   # Created on first training run
+        ├── best_model/          # Saved checkpoint + tokenizer
+        ├── config.json
+        ├── split_statistics.json
+        ├── training_history.json
+        ├── test_metrics.json
+        ├── classification_report.txt
+        ├── confusion_matrix.csv
+        └── test_predictions.csv
 ```
 
-## הקמת סביבה וירטואלית ב-Windows
+---
 
-```
+## Setup
+
+```bash
+cd text-model
 python -m venv .venv
-.venv\Scripts\activate
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-⚠️ ההורדה הראשונה של PyTorch ושל המודל `onlplab/alephbert-base` מ-Hugging Face עלולה
-להיות **כבדה (מאות MB) ולקחת זמן**, בהתאם למהירות האינטרנט. ריצות הבאות ישתמשו במטמון
-המקומי (`~/.cache/huggingface`) ויהיו מהירות בהרבה.
+The first training run will download `onlplab/alephbert-base` (~500 MB) from
+Hugging Face into `~/.cache/huggingface/`. Subsequent runs use the cache.
 
-## היכן למקם את הקורפוס הסופי
+---
 
-כאשר הקורפוס הסופי (אמיתי, לא סינתטי) יהיה מוכן, יש להניח אותו בתיקיית `data/`
-(לדוגמה: `data/final_corpus.jsonl`).
+## Running training
 
-## עדכון config.json עם הגעת הקורפוס
+```bash
+# Basic — uses all defaults from config.json
+python train.py --config config.json
 
-יש לעדכן בקובץ `config.json` את השדות הבאים תחת `data`:
+# Override epochs
+python train.py --config config.json --epochs 3
 
-- `input_path` — הנתיב היחסי לקובץ הקורפוס החדש (לדוגמה `"data/final_corpus.jsonl"`).
-- `input_format` — `"jsonl"`, `"json"` או `"csv"`, בהתאם לפורמט הקובץ בפועל.
-- `id_field`, `messages_field`, `role_field`, `text_field`, `label_field` — אם שמות
-  השדות בקורפוס האמיתי שונים משמות השדות בדוגמה, יש לעדכן אותם כאן.
-- `included_roles` — אילו תפקידים (roles) בשיחה ייכללו בטקסט (כרגע רק `"customer"`).
-- `label_mapping` — אילו תוויות גולמיות (raw labels) ממופות לכל אחת משתי המחלקות
-  הסופיות.
-
-שאר הקוד (`dataset.py`, `data_loader.py`) קורא את כל הערכים הללו מתוך `config.json`
-ואינו זקוק לשינוי כאשר משנים קורפוס.
-
-## איך עובד מיפוי התוויות (label mapping)
-
-כל שיחה מגיעה עם תווית גולמית בשדה `final_outcome` (למשל `converted`, `ghosted`).
-`label_mapping` בקונפיג ממפה כל תווית גולמית כזו לאחת משתי המחלקות הסופיות:
-
-```
-"interested":       ["converted", "appointment_set", "pending", "reengaged_pending"]
-"losing_interest":  ["explicit_rejection", "competitor_loss", "delivery_loss",
-                      "trust_loss", "ghosted"]
+# Custom experiment name (saves to outputs/my_experiment/)
+python train.py --config config.json --experiment-name alephbert_v2
 ```
 
-רשומות עם תווית גולמית שלא מופיעה בשום רשימה — **מדולגות (ignored)** ולא נכנסות
-ל-Dataset. מזהי המחלקות הסופיות (`label_to_id`) נקבעים באופן דטרמיניסטי (מיון
-אלפביתי של שמות המחלקות), כך שעבור המשימה הבינארית ברירת המחדל מתקבל תמיד:
+Training prints per-epoch metrics to stdout and saves the best model
+(by validation macro F1) as a checkpoint. After training, it loads the
+best checkpoint and evaluates once on the held-out test set.
 
+**Expected runtime** (rough estimates):
+- CPU only: ~8–15 hours for 5 epochs on 3,055 conversations at max_length=512
+- MPS (Apple Silicon): ~2–4 hours
+- CUDA (GPU): ~30–60 minutes
+
+---
+
+## Running analysis
+
+```bash
+python analyze_dataset.py --config config.json
 ```
-{"interested": 0, "losing_interest": 1}
-```
 
-## איך מחוברות הודעות הלקוח
+Reports: class distribution, raw outcome counts, conversation length
+distributions, estimated truncation percentage at common max_length values,
+domain distribution, leakage warnings.
 
-מתוך רשימת ה-`messages` של כל שיחה, נשמרות רק ההודעות ששדה ה-`role` שלהן נמצא
-ברשימת `included_roles` (כרגע: `customer` בלבד). ההודעות הנשמרות מחוברות למחרוזת
-טקסט אחת בעזרת `message_separator` (ברירת מחדל: `" [SEP] "`).
+---
 
-## max_length, padding ו-truncation
+## Running the input pipeline smoke test
 
-ההגדרות תחת `tokenizer` בקונפיג שולטות על הטוקניזציה:
-
-- `max_length` — אורך הרצף המקסימלי (בטוקנים) שהמודל יקבל.
-- `padding: "max_length"` — כל הרצפים מרופדים (padded) לאותו אורך קבוע, כדי
-  שאפשר יהיה לאגד (batch) אותם לטנזור אחיד.
-- `truncation: true` — טקסטים ארוכים מ-`max_length` נחתכים.
-
-טוקניזציה מתבצעת פעם אחת בלבד, בזמן יצירת ה-`HebrewConversationDataset`, ולא בכל
-epoch מחדש.
-
-## הרצת validate_inputs.py
-
-```
+```bash
 python validate_inputs.py --config config.json
 ```
 
-הסקריפט מבצע בדיקת עשן (smoke test) מלאה: טוען קונפיג, טוקנייזר, Dataset,
-DataLoader ומודל, שולף batch אחד, מריץ עליו את כל בדיקות התקינות (dtypes, shapes,
-טווחי ערכים, NaN/Inf וכו'), מריץ forward pass יחיד תחת `model.eval()` +
-`torch.no_grad()`, ומדפיס דוח תקינות. קוד היציאה הוא שונה מ-0 אם משהו נכשל.
+Verifies tensor shapes, dtypes, value ranges, and runs a single forward
+pass. Does **not** train the model. Requires downloading AlephBERT.
 
-## הרצת inspect_batch.py
+---
 
+## Configuration
+
+All key parameters live in `config.json`:
+
+| Section | Key | Default | Notes |
+|---|---|---|---|
+| `data.input_path` | — | `../hebrew-sales-dataset-generator/output/combined_dataset.json` | Real dataset |
+| `data.included_roles` | — | `["customer"]` | Only customer text enters the model |
+| `tokenizer.max_length` | — | `512` | AlephBERT maximum; do not use 256 |
+| `split.train_ratio` | — | `0.70` | Conversation-level stratified split |
+| `split.random_seed` | — | `42` | Fixed for reproducibility |
+| `training.epochs` | — | `5` | Override with `--epochs` flag |
+| `training.learning_rate` | — | `2e-5` | AdamW LR |
+| `training.weight_decay` | — | `0.01` | AdamW weight decay |
+| `training.warmup_ratio` | — | `0.1` | Linear warmup fraction of total steps |
+| `training.gradient_clip` | — | `1.0` | Gradient clipping |
+| `training.positive_class` | — | `losing_interest` | Positive class for binary F1 |
+| `dataloader.train_batch_size` | — | `8` | Reduce to 4 if OOM |
+| `dataloader.eval_batch_size` | — | `16` | For val/test |
+
+---
+
+## How the best checkpoint is selected
+
+After each epoch, validation metrics are computed (loss, accuracy, precision,
+recall, F1, macro F1, weighted F1). The epoch whose **validation macro F1**
+is highest is saved as `best_model/`. Macro F1 is used (not accuracy) because
+it equally weights both classes regardless of any residual class imbalance.
+
+Configure `training.save_best_metric` in `config.json` to change the metric.
+
+---
+
+## Output files
+
+After a successful run, `outputs/<experiment_name>/` contains:
+
+| File | Contents |
+|---|---|
+| `best_model/` | Saved AlephBERT weights + tokenizer (load with `from_pretrained`) |
+| `config.json` | Copy of the config used for this run |
+| `split_statistics.json` | Train/val/test conversation counts |
+| `training_history.json` | Per-epoch train loss and all val metrics |
+| `test_metrics.json` | Final test set metrics (loss, acc, P/R/F1, macro F1) |
+| `classification_report.txt` | Per-class sklearn classification report |
+| `confusion_matrix.csv` | Labeled confusion matrix |
+| `test_predictions.csv` | Per-conversation: ID, actual label, predicted label, probabilities |
+
+`outputs/split_ids.json` (at the top of `outputs/`) contains train/val/test
+IDs so the TF-IDF baseline can use the same test set.
+
+---
+
+## Running the TF-IDF baseline on the same split
+
+After the AlephBERT pipeline has run once (producing `outputs/split_ids.json`):
+
+```bash
+cd ../nlp-baseline
+python train_baseline.py \
+  --input ../hebrew-sales-dataset-generator/output/combined_dataset.json \
+  --config config_messages.json \
+  --output results/combined_shared_split \
+  --split-ids ../text-model/outputs/split_ids.json
 ```
-python inspect_batch.py --config config.json
+
+Without `--split-ids`, the baseline uses its own independent 80/20 split
+(original behavior, not directly comparable to AlephBERT).
+
+---
+
+## Running on CPU / GPU / MPS
+
+The pipeline automatically selects the best available device in order:
+`cuda > mps (Apple Silicon) > cpu`.
+
+To force CPU, set `CUDA_VISIBLE_DEVICES=""` before running:
+```bash
+CUDA_VISIBLE_DEVICES="" python train.py --config config.json
 ```
 
-הסקריפט מדפיס לכל רשומה ב-batch: מזהה רשומה, הטקסט המחובר, שם ומספר התווית,
-מספר הטוקנים לפני ריפוד (padding), 30 מזהי הטוקנים הראשונים, 30 הטוקנים הראשונים,
-וטקסט מפוענח (decoded). זהו כלי לבדיקה ידנית שהטוקניזציה בעברית נראית סבירה.
+---
 
-## אזהרת "newly initialized" של ראש הסיווג
+## Running tests
 
-בזמן טעינת המודל תוצג (בסבירות גבוהה) אזהרה דומה ל:
-
-```
-Some weights of BertForSequenceClassification were not initialized from the
-model checkpoint ... and are newly initialized: ['classifier.weight', ...]
-You should probably TRAIN this model on a down-stream task...
+```bash
+python -m pytest tests/ -v
 ```
 
-**זו אזהרה צפויה ולא שגיאה.** הצ'קפוינט הבסיסי `onlplab/alephbert-base` לא כולל
-ראש סיווג למשימה שלנו (סיווג בינארי interested / losing_interest), כך ש-
-Transformers יוצר ראש סיווג חדש ואקראי במקומו. ראש זה יאומן בשלב האימון העתידי —
-כרגע הוא רק חלק מבדיקת התקינות של הצינור.
+Tests cover: stratified split correctness, zero ID overlap, label mapping,
+split ID serialization/deserialization, dataset `subset_ids` filtering,
+metrics correctness, and checkpoint save/load. All tests run without
+downloading any model.
 
-## בחירת CUDA / CPU
+---
 
-הקוד בודק אוטומטית `torch.cuda.is_available()`: אם קיים GPU תואם CUDA, המודל
-עובר אליו; אחרת הוא נשאר על ה-CPU. המכשיר הנבחר (`cuda` או `cpu`) מודפס בכל
-הרצה של `data_loader.load_model`.
+## Known limitations of the synthetic dataset
 
-## לגבי מדדי ביצועים
+1. **All synthetic.** Every conversation was generated by an LLM. Performance
+   on real Israeli business WhatsApp conversations may be lower.
 
-מכיוון שבשלב הזה **אין אימון בכלל**, לא מיוצרים (ולא צריכים להיות מיוצרים) שום
-מדדי accuracy, F1, precision/recall או תוצאות אימון אחרות. `validate_inputs.py`
-מדווח רק loss בודד מ-forward pass יחיד לצורך בדיקת תקינות — זה **אינו** מדד ביצועים
-של מודל מאומן.
+2. **Stereotyped terminal messages.** Synthetic converted conversations end
+   with commitment-language phrases; rejected conversations end with
+   rejection-language phrases. A model can exploit these patterns instead of
+   learning conversational trajectory, inflating accuracy.
 
-## קורפוס הדוגמה (sample_corpus.jsonl)
+3. **38% truncation at max_length=512.** Long conversations lose their
+   later messages. The most informative messages (commitment/rejection
+   signals) often appear later, so this is a meaningful limitation.
 
-הקובץ `data/sample_corpus.jsonl` מכיל 8 שיחות עבריות **סינתטיות** קצרות
-(מסומנות `"synthetic": true`), 4 ממופות ל-`interested` ו-4 ל-`losing_interest`.
-מטרתו היחידה היא לבדוק טכנית את ה-Dataset, הטוקנייזר, ה-DataLoader ואת קלטי
-המודל — **הוא אינו נתוני מחקר או קורפוס אמיתי**, ואין להשתמש בו לאימון בפועל.
+4. **No real-world validation.** No human-annotated held-out set exists yet.
+   Test metrics should not be presented as production-quality estimates.

@@ -492,10 +492,47 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--input", required=True, type=Path, help="Path to the corpus file (.jsonl, .json, or .csv).")
     parser.add_argument("--config", required=True, type=Path, help="Path to the JSON config file.")
     parser.add_argument("--output", required=True, type=Path, help="Directory to write results into.")
+    parser.add_argument(
+        "--split-ids",
+        type=Path,
+        default=None,
+        help=(
+            "Optional path to a split_ids.json produced by the AlephBERT training pipeline. "
+            "When provided, the baseline uses the same train_ids and test_ids for a "
+            "scientifically fair comparison. val_ids are excluded from training so both "
+            "experiments see exactly the same training set. "
+            "If omitted, an independent stratified random split is used (original behavior)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
-def run(input_path: Path, config_path: Path, output_dir: Path) -> None:
+def _load_split_ids_from_file(split_ids_path: Path) -> tuple:
+    """Load train_ids and test_ids from a split_ids.json file.
+
+    val_ids are excluded from training so the baseline trains on exactly the
+    same conversations as AlephBERT. This ensures a fair comparison.
+    """
+    if not split_ids_path.exists():
+        raise BaselineError(f"split-ids file not found: {split_ids_path}")
+    try:
+        with split_ids_path.open("r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except json.JSONDecodeError as exc:
+        raise BaselineError(f"Invalid JSON in split-ids file: {exc}") from exc
+    train_ids = set(payload.get("train_ids", []))
+    test_ids = set(payload.get("test_ids", []))
+    val_ids = set(payload.get("val_ids", []))
+    if not train_ids or not test_ids:
+        raise BaselineError("split-ids file must contain non-empty 'train_ids' and 'test_ids'.")
+    logger.info(
+        "Loaded split IDs: train=%d, val=%d (excluded), test=%d",
+        len(train_ids), len(val_ids), len(test_ids),
+    )
+    return train_ids, test_ids
+
+
+def run(input_path: Path, config_path: Path, output_dir: Path, split_ids_path: Optional[Path] = None) -> None:
     config = load_config(config_path)
     records = load_corpus(input_path)
     logger.info("Loaded %d raw record(s) from %s", len(records), input_path)
@@ -504,23 +541,39 @@ def run(input_path: Path, config_path: Path, output_dir: Path) -> None:
     logger.info("Built dataset with %d usable record(s) across %d class(es).", len(df), df["label"].nunique())
     logger.info("Class distribution: %s", df["label"].value_counts().to_dict())
 
-    test_size = float(config.get("test_size", 0.2))
-    random_state = int(config.get("random_state", 42))
-
-    try:
-        train_df, test_df = train_test_split(
-            df,
-            test_size=test_size,
-            random_state=random_state,
-            stratify=df["label"],
+    if split_ids_path is not None:
+        # Use shared split IDs for fair comparison with AlephBERT
+        train_ids, test_ids = _load_split_ids_from_file(split_ids_path)
+        id_field = config.get("id_field", "record_id")
+        train_df = df[df[id_field].astype(str).isin(train_ids)].reset_index(drop=True)
+        test_df = df[df[id_field].astype(str).isin(test_ids)].reset_index(drop=True)
+        if train_df.empty or test_df.empty:
+            raise BaselineError(
+                f"After applying split IDs, train={len(train_df)} test={len(test_df)}. "
+                "Check that id_field in config matches the conversation_id field in the corpus."
+            )
+        logger.info(
+            "Using shared split: train=%d, test=%d (val excluded from training)",
+            len(train_df), len(test_df),
         )
-    except ValueError as exc:
-        raise BaselineError(
-            "Stratified train/test split failed -- this usually means one or more "
-            "classes have too few examples for the chosen test_size. Add more data, "
-            "raise minimum_examples_per_class filtering, or adjust test_size. "
-            f"Original error: {exc}"
-        ) from exc
+    else:
+        # Original behavior: independent stratified random split
+        test_size = float(config.get("test_size", 0.2))
+        random_state = int(config.get("random_state", 42))
+        try:
+            train_df, test_df = train_test_split(
+                df,
+                test_size=test_size,
+                random_state=random_state,
+                stratify=df["label"],
+            )
+        except ValueError as exc:
+            raise BaselineError(
+                "Stratified train/test split failed -- this usually means one or more "
+                "classes have too few examples for the chosen test_size. Add more data, "
+                "raise minimum_examples_per_class filtering, or adjust test_size. "
+                f"Original error: {exc}"
+            ) from exc
 
     pipeline = build_pipeline(config.get("tfidf", {}), config.get("model", {}))
     pipeline.fit(train_df["cleaned_text"], train_df["label"])
@@ -561,7 +614,7 @@ def run(input_path: Path, config_path: Path, output_dir: Path) -> None:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     try:
-        run(args.input, args.config, args.output)
+        run(args.input, args.config, args.output, split_ids_path=args.split_ids)
     except BaselineError as exc:
         logger.error(str(exc))
         return 1

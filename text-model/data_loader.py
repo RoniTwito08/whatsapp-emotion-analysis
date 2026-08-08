@@ -13,7 +13,7 @@ import json
 import logging
 import random
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Set
 
 import numpy as np
 import torch
@@ -25,7 +25,7 @@ from transformers import (
     PreTrainedTokenizerBase,
 )
 
-from dataset import HebrewConversationDataset, DatasetError
+from dataset import HebrewConversationDataset, DatasetError, load_corpus
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger("data_loader")
@@ -111,44 +111,78 @@ def load_model(
         id2label=id_to_label,
     )
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = get_device()
     logger.info("Selected device: %s", device)
     model.to(device)
     return model
 
 
 def get_device() -> torch.device:
-    """Return cuda if available, otherwise cpu."""
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    """Return the best available device: cuda > mps > cpu."""
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
 
 
 # ---------------------------------------------------------------------------
 # Dataset / DataLoader factories
 # ---------------------------------------------------------------------------
 
-def create_dataset(
-    config: Dict[str, Any],
-    tokenizer: PreTrainedTokenizerBase,
-    base_dir: Path | None = None,
-) -> HebrewConversationDataset:
-    """Build the HebrewConversationDataset described by config."""
+def load_corpus_records(config: Dict[str, Any], base_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """Load raw corpus records from the path specified in config['data']['input_path']."""
+    input_path = Path(config["data"]["input_path"])
+    if base_dir is not None and not input_path.is_absolute():
+        input_path = base_dir / input_path
     try:
-        return HebrewConversationDataset(config, tokenizer, base_dir=base_dir)
+        return load_corpus(input_path)
     except DatasetError as exc:
         raise ConfigError(str(exc)) from exc
 
 
-def create_dataloader(dataset: HebrewConversationDataset, config: Dict[str, Any]) -> DataLoader:
+def create_dataset(
+    config: Dict[str, Any],
+    tokenizer: PreTrainedTokenizerBase,
+    base_dir: Optional[Path] = None,
+    subset_ids: Optional[Set[str]] = None,
+) -> HebrewConversationDataset:
+    """Build the HebrewConversationDataset described by config.
+
+    Args:
+        subset_ids: Optional set of conversation IDs to include. When provided,
+            only records whose id matches this set are retained. Useful for
+            creating train/val/test split datasets from a shared corpus file.
+    """
+    try:
+        return HebrewConversationDataset(config, tokenizer, base_dir=base_dir, subset_ids=subset_ids)
+    except DatasetError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def create_dataloader(
+    dataset: HebrewConversationDataset,
+    config: Dict[str, Any],
+    split: str = "train",
+) -> DataLoader:
     """Build a DataLoader using dataloader.* settings from config.
 
-    num_workers defaults to 0 so the pipeline works unmodified on Windows,
-    where multiprocessing worker startup requires extra guarding.
+    Args:
+        split: One of 'train', 'val', 'test'. Controls batch_size key and
+            whether shuffle is applied (only for train).
     """
     dataloader_config = config.get("dataloader", {})
+    if split == "train":
+        batch_size = int(dataloader_config.get("train_batch_size", dataloader_config.get("batch_size", 8)))
+        shuffle = bool(dataloader_config.get("shuffle", True))
+    else:
+        batch_size = int(dataloader_config.get("eval_batch_size", dataloader_config.get("batch_size", 16)))
+        shuffle = False
+
     return DataLoader(
         dataset,
-        batch_size=int(dataloader_config.get("batch_size", 4)),
-        shuffle=bool(dataloader_config.get("shuffle", True)),
+        batch_size=batch_size,
+        shuffle=shuffle,
         num_workers=int(dataloader_config.get("num_workers", 0)),
         pin_memory=bool(dataloader_config.get("pin_memory", False)),
     )
