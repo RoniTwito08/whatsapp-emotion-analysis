@@ -58,5 +58,62 @@
   "model": {
     "num_labels": 2
   },
-  "random_seed": 42
+  "random_seed": 42,
+  "early_detection_e2": {
+    "experiment_name": "early_detection_e2",
+    "starting_checkpoint": "outputs/alephbert_continued_ablation_v1/best_model",
+    "training_fractions": [0.25, 0.50, 0.75, 1.0],
+    "eval_fractions": [0.25, 0.50, 0.75, 1.0],
+    "checkpoint_selection_fractions": [0.25, 0.50, 0.75],
+    "positive_class": "losing_interest",
+    "epochs": 5,
+    "learning_rate": 1e-5,
+    "batch_size": 8,
+    "eval_batch_size": 32,
+    "weight_decay": 0.01,
+    "warmup_ratio": 0.1,
+    "gradient_clip": 1.0
+  },
+  "fusion": {
+    "bert_checkpoint": "outputs/alephbert_baseline_v1/best_model",
+    "positive_class": "losing_interest",
+    "head_hidden_dim": 256,
+    "head_dropout": 0.1,
+    "frozen": {
+      "epochs": 10,
+      "learning_rate": 1e-3,
+      "batch_size": 16,
+      "weight_decay": 0.01,
+      "warmup_ratio": 0.1,
+      "gradient_clip": 1.0
+    },
+    "finetuned": {
+      "epochs": 5,
+      "learning_rate": 2e-5,
+      "head_learning_rate": 1e-3,
+      "batch_size": 8,
+      "weight_decay": 0.01,
+      "warmup_ratio": 0.1,
+      "gradient_clip": 1.0
+    }
+  },
+  "behavioral_model": {
+    "experiment_name": "behavioral_baseline_v1",
+    "positive_class": "losing_interest",
+    "logistic_regression": {
+      "C": 1.0,
+      "max_iter": 1000,
+      "solver": "lbfgs",
+      "class_weight": null,
+      "random_state": 42
+    },
+    "random_forest": {
+      "n_estimators": 200,
+      "max_depth": null,
+      "min_samples_leaf": 2,
+      "class_weight": null,
+      "random_state": 42,
+      "n_jobs": -1
+    }
+  }
 }
