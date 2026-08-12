@@ -59,6 +59,24 @@
     "num_labels": 2
   },
   "random_seed": 42,
+  "early_detection_e3": {
+    "experiment_name": "early_detection_e3",
+    "starting_checkpoint": "outputs/alephbert_continued_ablation_v1/best_model",
+    "training_fractions": [0.25, 0.50, 0.75, 1.0],
+    "eval_fractions": [0.25, 0.50, 0.75, 1.0],
+    "checkpoint_selection_fractions": [0.25, 0.50, 0.75],
+    "positive_class": "losing_interest",
+    "epochs": 5,
+    "bert_learning_rate": 1e-5,
+    "head_learning_rate": 1e-3,
+    "batch_size": 8,
+    "eval_batch_size": 32,
+    "weight_decay": 0.01,
+    "warmup_ratio": 0.1,
+    "gradient_clip": 1.0,
+    "head_hidden_dim": 256,
+    "head_dropout": 0.1
+  },
   "early_detection_e2": {
     "experiment_name": "early_detection_e2",
     "starting_checkpoint": "outputs/alephbert_continued_ablation_v1/best_model",
